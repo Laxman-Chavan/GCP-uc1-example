@@ -21,16 +21,20 @@ public class App {
 		 */
 		PipelineOptions po = PipelineOptionsFactory.create();
 
+		//create the pipeline option object
 		Pipeline p = Pipeline.create(po);
 
+		//read the message from pubsubIO
 		PCollection<String> pubSubMsg = p.apply(PubsubIO.readStrings().fromTopic("projects/nttdata-c4e-bde/topics/uc1-dlq-topic-0"));
 
 		PCollection<TableRow> bgtableRow = pubSubMsg.apply(ParDo.of(new ConvertToString()));
-
+        
+		//write the pubsub message into the big query table as an ouput
 		bgtableRow.apply(BigQueryIO.writeTableRows().to("nttdata-c4e-bde:uc1_2.account")
 				.withWriteDisposition(BigQueryIO.Write.WriteDisposition.WRITE_APPEND)
 				.withCreateDisposition(BigQueryIO.Write.CreateDisposition.CREATE_IF_NEEDED));
 
+		//run the pipiline
 		p.run().waitUntilFinish();
 	}
 
