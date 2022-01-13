@@ -124,7 +124,7 @@ public class App {
         PCollection<CommonLog> commonLogs = pipeline
                 .apply("ReadMessage", PubsubIO.readStrings()
                         .withTimestampAttribute("timestamp")
-                        .fromTopic(options.getInputTopic()))
+                        .fromSubscription("projects/nttdata-c4e-bde/subscriptions/uc1-input-topic-sub-14"))
 
                 .apply("ParseJson", ParDo.of(new JsonToCommonLog()));
 
