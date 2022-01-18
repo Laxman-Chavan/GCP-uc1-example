@@ -1,29 +1,23 @@
 package com.gcp.lab1.example;
 
-import com.google.gson.Gson;
-
-import org.apache.beam.runners.dataflow.DataflowRunner;
 import org.apache.beam.runners.dataflow.options.DataflowPipelineOptions;
 import org.apache.beam.sdk.Pipeline;
-import org.apache.beam.sdk.PipelineResult;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubIO;
-import org.apache.beam.sdk.options.Description;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
-import org.apache.beam.sdk.schemas.Schema;
-import org.apache.beam.sdk.schemas.transforms.AddFields;
-import org.apache.beam.sdk.schemas.transforms.Select;
 import org.apache.beam.sdk.transforms.*;
-import org.apache.beam.sdk.transforms.windowing.FixedWindows;
-import org.apache.beam.sdk.transforms.windowing.IntervalWindow;
-import org.apache.beam.sdk.transforms.windowing.Window;
-import org.apache.beam.sdk.values.PCollection;
-import org.apache.beam.sdk.values.Row;
-import org.joda.time.DateTime;
 import org.joda.time.Duration;
-import org.joda.time.Instant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.apache.beam.runners.dataflow.DataflowRunner;
+import com.google.api.services.bigquery.model.TableRow;
+import com.google.api.services.bigquery.model.TableSchema;
+import com.google.api.services.bigquery.model.TableFieldSchema;
+import java.util.ArrayList;
+import java.util.List;
+import org.apache.beam.sdk.io.gcp.pubsub.PubsubMessage;
+import org.apache.beam.sdk.transforms.windowing.FixedWindows;
+import org.apache.beam.sdk.transforms.windowing.Window;
 
 /**
  * Class for executing a Apache Beam pipeline
@@ -34,145 +28,84 @@ public class App {
 	 * The logger to output status messages to.
 	 */
 	private static final Logger LOG = LoggerFactory.getLogger(App.class);
+	
+	private static final String JOB_NAME="usecase1-labid-2";
+	private static final String REGION="europe-west4";
+	private static final String GCP_TEMP_LOCATION="gs://c4e-uc1-dataflow-temp-2/temp";
+	private static final String STAGING_LOCATION="gs://c4e-uc1-dataflow-temp-2/staging";
+	private static final String SERVICE_ACCOUNT="c4e-uc1-sa-2@nttdata-c4e-bde.iam.gserviceaccount.com";
+	private static final String WORKER_MACHINE_TYPE="n1-standard-1";
+	private static final String SUBNETWORK="regions/europe-west4/subnetworks/subnet-uc1-2";
+	
+	private static final String BQ_TABLE="nttdata-c4e-bde:uc1_2.account";
+	private static final String TOPIC_SUB="projects/nttdata-c4e-bde/subscriptions/uc1-input-topic-sub-2";
 
-	/**
-	 * The {@link Options} class provides the custom execution options passed by the
-	 * executor at the command-line.
-	 */
-	public interface Options extends DataflowPipelineOptions {
-		@Description("Window duration length, in seconds")
-		Integer getWindowDuration();
-
-		void setWindowDuration(Integer windowDuration);
-
-		@Description("BigQuery aggregate table name")
-		String getAggregateTableName();
-
-		void setAggregateTableName(String aggregateTableName);
-
-		@Description("Input topic name")
-		String getInputTopic();
-
-		void setInputTopic(String inputTopic);
-
-		@Description("BigQuery raw table name")
-		String getRawTableName();
-
-		void setRawTableName(String rawTableName);
-	}
-
+	
+  
 	/**
 	 * The main entry-point for pipeline execution. This method will start the
 	 * pipeline but will not wait for it's execution to finish. If blocking
 	 * execution is required, use the
-	 * {@link StreamingMinuteTrafficPipeline#run(Options)} method to start the
-	 * pipeline and invoke {@code result.waitUntilFinish()} on the
-	 * {@link PipelineResult}.
-	 *
+	 * 
 	 * @param args The command-line args passed by the executor.
 	 */
 	public static void main(String[] args) {
-		Options options = PipelineOptionsFactory.fromArgs(args).withValidation().as(Options.class);
-		options.setJobName("usecase1-labid-2");
-		options.setRegion("europe-west4");
-		options.setGcpTempLocation("gs://c4e-uc1-dataflow-temp-2/temp");
-		options.setStagingLocation("gs://c4e-uc1-dataflow-temp-2/staging");
-		options.setServiceAccount("c4e-uc1-sa-2@nttdata-c4e-bde.iam.gserviceaccount.com");
-		options.setWorkerMachineType("n1-standard-1");
-		options.setWindowDuration(60);
-		options.setSubnetwork("regions/europe-west4/subnetworks/subnet-uc1-2");
-		options.setStreaming(true);
+		DataflowPipelineOptions options = PipelineOptionsFactory.fromArgs(args).withValidation()
+				.as(DataflowPipelineOptions.class);
+		// set the command line attributes
+		options.setJobName(JOB_NAME);
+		options.setRegion(REGION);
 		options.setRunner(DataflowRunner.class);
-		run(options);
+		options.setGcpTempLocation(GCP_TEMP_LOCATION);
+		options.setStagingLocation(STAGING_LOCATION);
+		options.setServiceAccount(SERVICE_ACCOUNT);
+		options.setWorkerMachineType(WORKER_MACHINE_TYPE);
+		options.setSubnetwork(SUBNETWORK);
+		options.setStreaming(true);
+
+		runPipeline(options);
+
 	}
 
-	/**
-	 * A DoFn acccepting Json and outputing CommonLog with Beam Schema
-	 */
-	static class JsonToCommonLog extends DoFn<String, CommonLog> {
+	// method to execute the apache beam pipeline
+	public static void runPipeline(DataflowPipelineOptions options) {
+		// Build the table schema for the output table.
+		List<TableFieldSchema> fields = new ArrayList<>();
+		fields.add(new TableFieldSchema().setName("name").setType("STRING"));
+		fields.add(new TableFieldSchema().setName("surname").setType("STRING"));
+		fields.add(new TableFieldSchema().setName("id").setType("INTEGER"));
+		TableSchema schema = new TableSchema().setFields(fields);
+		// created pipeline object
+		Pipeline p = Pipeline.create(options);
+		p.apply("ReadPubSubMessage",
+				PubsubIO.readMessagesWithAttributes()
+						.fromSubscription(TOPIC_SUB))
+				.apply("WindowByMinute", Window.into(FixedWindows.of(Duration.standardSeconds(60))))
 
-		@ProcessElement
-		public void processElement(@Element String json, OutputReceiver<CommonLog> r) throws Exception {
-			Gson gson = new Gson();
-			CommonLog commonLog = gson.fromJson(json, CommonLog.class);
-			r.output(commonLog);
-		}
-	}
-
-	/**
-	 * A Beam schema for counting pageviews per minute
-	 */
-	public static final Schema pageViewsSchema = Schema.builder().addInt64Field("pageviews").addDateTimeField("minute")
-			.build();
-
-	public static final Schema rawSchema = Schema.builder().addStringField("user_id")
-			.addDateTimeField("event_timestamp").addDateTimeField("processing_timestamp").build();
-
-	/**
-	 * Runs the pipeline to completion with the specified options. This method does
-	 * not wait until the pipeline is finished before returning. Invoke
-	 * {@code result.waitUntilFinish()} on the result object to block until the
-	 * pipeline is finished running if blocking programmatic execution is required.
-	 *
-	 * @param options The execution options.
-	 * @return The pipeline result.
-	 */
-	public static PipelineResult run(Options options) {
-
-		// Create the pipeline
-		Pipeline pipeline = Pipeline.create(options);
-
-		/*
-		 * Steps: 1) Read something 2) Transform something 3) Write something
-		 */
-
-		PCollection<CommonLog> commonLogs = pipeline
-				.apply("ReadMessage",
-						PubsubIO.readStrings().withTimestampAttribute("timestamp")
-								.fromSubscription("projects/nttdata-c4e-bde/subscriptions/uc1-input-topic-sub-14"))
-
-				.apply("ParseJson", ParDo.of(new JsonToCommonLog()));
-
-		// Window and write to BQ
-		commonLogs.apply("WindowByMinute", Window.into(FixedWindows.of(Duration.standardSeconds(60))))
-
-				// update to Group.globally() after resolved:
-				// https://issues.apache.org/jira/browse/BEAM-10297
-				// Only if supports Row output
-				.apply("CountPerMinute", Combine.globally(Count.<CommonLog>combineFn()).withoutDefaults())
-				.apply("ConvertToRow", ParDo.of(new DoFn<Long, Row>() {
+				.apply("ConvertDataToTableRows", ParDo.of(new DoFn<PubsubMessage, TableRow>() {
 					@ProcessElement
-					public void processElement(@Element Long views, OutputReceiver<Row> r, IntervalWindow window) {
-						Instant i = Instant.ofEpochMilli(window.start().getMillis());
-						Row row = Row.withSchema(pageViewsSchema).addValues(views, i).build();
-						r.output(row);
+					public void processElement(ProcessContext c) {
+						PubsubMessage message = c.element();
+						int id = 0;
+						try {
+							id = Integer.parseInt(message.getAttribute("id"));
+						} catch (NumberFormatException e) {
+							e.getMessage();
+						}
+						// get the attributes from pub sub message
+						String name = message.getAttribute("name");
+						String surname = message.getAttribute("surname");
+						// set the attributes in the table row
+						TableRow row = new TableRow().set("id", id).set("name", name).set("surname", surname);
+						c.output(row);
 					}
-				})).setRowSchema(pageViewsSchema)
-				// Streaming insert of aggregate data
-				.apply("WriteAggregateToBQ",
-						BigQueryIO.<Row>write().to("nttdata-c4e-bde:uc1_2.account").useBeamSchema()
-								.withWriteDisposition(BigQueryIO.Write.WriteDisposition.WRITE_APPEND)
-								.withCreateDisposition(BigQueryIO.Write.CreateDisposition.CREATE_IF_NEEDED));
+				})).apply("InsertTableRowsToBigQuery",
+						BigQueryIO.writeTableRows().to(BQ_TABLE).withSchema(schema)
+								.withCreateDisposition(BigQueryIO.Write.CreateDisposition.CREATE_IF_NEEDED)
+								.withWriteDisposition(BigQueryIO.Write.WriteDisposition.WRITE_APPEND));
 
-		// Write raw to BQ
-		// But we want to add a processing time indicator as well
-		commonLogs.apply("SelectFields", Select.fieldNames("user_id", "timestamp"))
-				.apply("AddProcessingTimeField",
-						AddFields.<Row>create().field("processing_timestamp", Schema.FieldType.DATETIME))
-				.apply("AddProcessingTime", MapElements.via(new SimpleFunction<Row, Row>() {
-					@Override
-					public Row apply(Row row) {
-						return Row.withSchema(rawSchema).addValues(row.getString("user_id"),
-								new DateTime(row.getString("timestamp")), DateTime.now()).build();
-					}
-				})).setRowSchema(rawSchema).apply("WriteRawToBQ",
-						BigQueryIO.<Row>write().to(options.getRawTableName()).useBeamSchema()
-								.withWriteDisposition(BigQueryIO.Write.WriteDisposition.WRITE_APPEND)
-								.withCreateDisposition(BigQueryIO.Write.CreateDisposition.CREATE_IF_NEEDED));
-
-		LOG.info("Building pipeline...");
-
-		return pipeline.run();
+		LOG.info("Building pipeline......................");
+		p.run().waitUntilFinish();
 	}
 
 }
